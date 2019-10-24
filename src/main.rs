@@ -10,18 +10,18 @@ use std::fs::File;
 use std::io::Read;
 
 fn read_rom() -> std::io::Result<Vec<u8>> {
-    let mut file = File::open("pong.ch8")?;
+	let mut file = File::open("pong.ch8")?;
 
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
+	let mut data = Vec::new();
+	file.read_to_end(&mut data)?;
 
-    return Ok(data);
+	return Ok(data);
 }
 
 fn main() {
 	// Statements here are executed when the compiled binary is called
 	// Initialize system
-	let mut system = System {
+	let cpu = CPU {
 		opcode: 0,
 		pc: 0,
 		v: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
@@ -39,19 +39,60 @@ fn main() {
 	};
 	
 	// Fetch opcode
-	system.opcode = 162 << 8 | 240;
-	println!("{:x}", system.opcode);
+	cpu.fetch_opcode()
 }
 
-struct System {
+struct CPU {
 	opcode: u16,
 	pc: u8,
 	memory: [u8; 4096],
 	v: [u8; 16],
-	i: u8,
+	i: usize,
 	//gfx: [[bool;64]; 32],
 	delay_timer: u8,
 	sound_timer: u8,
 	stack: [u8; 16],
 	sp: u8
+}
+
+impl CPU {
+
+	fn fetch_opcode(mut self: Self) {
+		self.opcode = 0xa2 << 8 | 0xf0;
+		println!("{:x}", self.opcode);
+		self.decode_opcode(self.opcode);
+	}
+
+	fn get_nnn(&self, opcode: u16) -> usize {
+		return (opcode & 0x0FFF) as usize;
+	}
+
+	fn get_kk(&self, opcode: u16) {
+		(opcode & 0x00FF) as u8;
+	}
+
+	fn op_annn(self, opcode: u16){
+		let nnn = self.get_nnn(opcode);
+		self.i = nnn;
+		println!("{:x}", nnn);
+		return ();
+	}
+	
+	fn decode_opcode(&self, opcode: u16) {
+		let nibbles = (
+			(opcode & 0xF000) >> 12 as u8,
+			(opcode & 0x0F00) >> 8 as u8,
+			(opcode & 0x00F0) >> 4 as u8,
+			(opcode & 0x000F) as u8,
+		); 
+		
+		let x = nibbles.1 as usize;
+		let y = nibbles.2 as usize;
+		let n = nibbles.3 as usize;
+		
+		match nibbles {
+			(A, _ , _, _) => self.op_annn(opcode)
+		}
+	}
+
 }
