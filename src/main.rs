@@ -1,229 +1,246 @@
-
 use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
 use std::thread;
+use std::env;
 
-// The chip8 fontset
+extern crate sdl2;
+
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::rect::Rect;
+
+mod cpu;
+
+// The CHIP-8 fontset
 static CHIP8_FONTSET: [u8; 80] =
 [
-  0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-  0x20, 0x60, 0x20, 0x20, 0x70, // 1
-  0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-  0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-  0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-  0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-  0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-  0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-  0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-  0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-  0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-  0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-  0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-  0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-  0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-  0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+    0xF0, 0x90, 0x90, 0x90, 0xF0, //0
+    0x20, 0x60, 0x20, 0x20, 0x70, //1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, //2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, //3
+    0x90, 0x90, 0xF0, 0x10, 0x10, //4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, //5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, //6
+    0xF0, 0x10, 0x20, 0x40, 0x40, //7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, //8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, //9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, //A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, //B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, //C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, //D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, //E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  //F
 ];
 
-fn read_rom() -> std::io::Result<Vec<u8>> {
-	let mut file = File::open("pong.ch8")?;
-
-	let mut data = Vec::new();
-	file.read_to_end(&mut data)?;
-
-	return Ok(data);
+fn read_rom(romfile: &String) -> std::io::Result<Vec<u8>> {
+    let mut file = File::open(romfile)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    return Ok(data);
 }
 
-fn main() {
-	// Initialize the cpu system
-	let mut cpu = CPU::initialize();
-	
-	// Read the ROM
-	let rom = match read_rom() {
-		Ok(value) => value,
-		Err(_error) => Vec::new() // TODO: Not let this silently fail!
-	};
-	
-	// Load the chip8 font
-	let mut i = 0;
-	for val in CHIP8_FONTSET.iter() {
-		cpu.memory[i] = *val;
-		i += 1;
-	}
+fn main() -> Result<(), String>  {
 
-	// Load ROM into the memory
-	i = 512;
-	for val in rom {
-		cpu.memory[i] = val;
-		i += 1;
-	}
-	
-	// Main loop
-	loop {
-		// Fetch opcode
-		cpu.fetch_opcode();
+    // APP INIT ------
 
-		if cpu.delay_timer > 0 {
-			cpu.delay_timer -= 1;
-		}
+    // Get console arguments
+    // args[1]: The rom filename
+    let args: Vec<String> = env::args().collect();
 
-		if cpu.sound_timer > 0 {
-			if cpu.sound_timer == 1 {
-				println!("BEEEP");
-			}
-			cpu.sound_timer -= 1
-		}
-		
-		// Draw the screen
-		if cpu.draw {
-			for y in 0..32 {
-				println!("{:?}", &cpu.gfx[y][..])
-			}
-			cpu.draw = false;
-		}
-		
-		// Just a flag to break the cycle if an unknown instruction is found
-		if cpu.breakexe {
-			break
-		}
-		
-		// Let's execute 60 opcodes per second
-		thread::sleep(Duration::from_millis(16))
-	}
-}
+    // Helpers and SDL2 graphics initialization
+    let sdl_context = sdl2::init()?;
+    let video_subsystem = sdl_context.video()?;
+    let window = video_subsystem.window("Rust 8", 640, 320)
+        .position_centered()
+        .opengl()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut pixels: [u8; (64 * 32) * 3] = [0; (64 * 32) * 3];
+    let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
+    let texture_creator = canvas.texture_creator();
+    let mut texture = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, 64, 32)
+        .map_err(|e| e.to_string())?;
+    canvas.clear();
+    canvas.copy(&texture, None, Some(Rect::new(0, 0, 640, 320)))?;
+    canvas.present();
 
-struct CPU {
-	opcode: u16,
-	pc: usize,
-	memory: [u8; 4096],
-	v: [usize; 16],
-	i: usize,
-	gfx: [[usize;64]; 32],
-	delay_timer: u8,
-	sound_timer: u8,
-	stack: [u8; 16],
-	sp: usize,
-	draw: bool,
-	breakexe: bool
-}
+    // SDL2 Keyboard event pump
+    let mut event_pump = sdl_context.event_pump().unwrap();
 
-impl CPU {
+    // Initialize the cpu system
+    let mut cpu = cpu::CPU::initialize();
 
-	fn fetch_opcode(&mut self) {
-		self.opcode = (self.memory[self.pc] as u16) << 8 | (self.memory[self.pc+1] as u16);
-		self.decode_opcode();
-		self.pc += 2
-	}
+    // CHIP-8 INIT ------
 
-	fn initialize() -> CPU {
-		return CPU {
-			opcode: 0,
-			pc: 0x200,
-			v: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-			memory: [0; 4096],
-			gfx: [[0; 64]; 32],
-			i: 0,
-			delay_timer: 0,
-			sound_timer: 0,
-			stack: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-			sp: 0,
-			draw: false,
-			breakexe: false
-		};
-	}
+    // Read the ROM
+    let rom = match read_rom(&args[1]) {
+        Ok(value) => value,
+        Err(_error) => Vec::new() // TODO: Not let this silently fail!
+    };
 
-	fn get_nnn(&self) -> usize {
-		return (self.opcode & 0x0FFF) as usize;
-	}
+    // Load the chip8 font
+    for i in 0..80 {
+        cpu.memory[i] = CHIP8_FONTSET[i];
+    }
 
-	fn get_nn(&self) -> usize {
-		return (self.opcode & 0x00FF) as usize;
-	}
+    // Load ROM into the memory
+    for (x, &val) in rom.iter().enumerate() {
+        cpu.memory[0x200 + x] = val;
+    }
 
-	fn get_kk(&self) -> u8 {
-		return (self.opcode & 0x00FF) as u8;
-	}
-	
-	// This is one of those weird opcodes
-	fn op_2nnn(&mut self){
-		self.stack[self.sp] = (self.pc as u8);
-		self.sp += 1;
-		self.pc = self.get_nnn()
-	}
-	
-	fn op_annn(&mut self){
-		self.i = self.get_nnn();
-	}
-	
-	fn op_6xnn(&mut self, x: usize){
-		self.v[x] = self.get_nn();
-	}
-	
-	fn op_fx65(&mut self, x: usize) {
-		for m in 0..=x {
-			self.v[m] = (self.memory[self.i + (1+m)]) as usize;
-		}
-	}
-	
-	fn op_fx33(&mut self, x: usize) {
-		self.memory[self.i] = (self.v[x] / 100) as u8;
-		self.memory[self.i + 1] = ((self.v[x] / 10) % 10) as u8;
-		self.memory[self.i + 2] = ((self.v[x] % 100) % 10) as u8;
-	}
-	
-	// This is the opcode that draws the screen
-	fn op_dxyn(&mut self, x: usize, y: usize, height: usize){
-		
-		// We'll get the coordinates from where we will start drawing from the v registers
-		// indicated by the opcode x and y values
-		let vx = self.v[x];
-		let vy = self.v[y];
-		let mut pixel: u8;
+    // MAIN LOOP ----
 
-		self.v[0xF] = 0;
-		// The height of the sprite is determined by the last nibble of our opcode
-		for yline in 0..height {
-			pixel = self.memory[self.i + yline];
-			// Every sprite is 8 pixels in width
-			for xline in 0..8 {
-				if (pixel & (0x80 >> xline)) != 0 {
-					// This conditional is some collision detection stuff
-					if self.gfx[vy + yline][vx + xline] == 1 {
-						self.v[0xF] = 1;
-					}
-					self.gfx[vy + yline][vx + xline] ^= 1;
-				}
-			}
-		}
-		self.draw = true;
-	}
+    'mainloop: loop {
+        // TODO: Maybe make this block of code cleaner?
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::KeyDown { keycode: Some(Keycode::X), ..} => {
+                    cpu.key[0] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Num1), ..} => {
+                    cpu.key[1] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Num2), ..} => {
+                    cpu.key[2] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Num3), ..} => {
+                    cpu.key[3] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Q), ..} => {
+                    cpu.key[4] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::W), ..} => {
+                    cpu.key[5] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::E), ..} => {
+                    cpu.key[6] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::A), ..} => {
+                    cpu.key[7] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::S), ..} => {
+                    cpu.key[8] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::D), ..} => {
+                    cpu.key[9] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Z), ..} => {
+                    cpu.key[10] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::C), ..} => {
+                    cpu.key[11] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::Num4), ..} => {
+                    cpu.key[12] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::R), ..} => {
+                    cpu.key[13] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::F), ..} => {
+                    cpu.key[14] = 1
+                },
+                Event::KeyDown { keycode: Some(Keycode::V), ..} => {
+                    cpu.key[15] = 1
+                },
+                Event::KeyUp { keycode: Some(Keycode::X), ..} => {
+                    cpu.key[0] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Num1), ..} => {
+                    cpu.key[1] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Num2), ..} => {
+                    cpu.key[2] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Num3), ..} => {
+                    cpu.key[3] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Q), ..} => {
+                    cpu.key[4] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::W), ..} => {
+                    cpu.key[5] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::E), ..} => {
+                    cpu.key[6] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::A), ..} => {
+                    cpu.key[7] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::S), ..} => {
+                    cpu.key[8] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::D), ..} => {
+                    cpu.key[9] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Z), ..} => {
+                    cpu.key[10] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::C), ..} => {
+                    cpu.key[11] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::Num4), ..} => {
+                    cpu.key[12] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::R), ..} => {
+                    cpu.key[13] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::F), ..} => {
+                    cpu.key[14] = 0
+                },
+                Event::KeyUp { keycode: Some(Keycode::V), ..} => {
+                    cpu.key[15] = 0
+                },
+                Event::KeyDown { keycode: Some(Keycode::Escape), .. } |
+                Event::Quit { .. } => break 'mainloop,
+                _ => {}
+            }
+        }
 
-	fn unknown(&mut self){
-		println!("Unknown instruction {:x}", self.opcode);
-		self.breakexe = true
-	}
+        // Fetch opcode
+        cpu.fetch_opcode();
 
-	fn decode_opcode(&mut self) {
-		let nibbles = (
-			(self.opcode & 0xF000) >> 12 as u8,
-			(self.opcode & 0x0F00) >> 8 as u8,
-			(self.opcode & 0x00F0) >> 4 as u8,
-			(self.opcode & 0x000F) as u8,
-		);
-		let x = nibbles.1 as usize;
-		let y = nibbles.2 as usize;
-		let n = nibbles.3 as usize;
+        // Decrease delay timer
+        if cpu.delay_timer > 0 {
+            cpu.delay_timer -= 1;
+        }
 
-		match nibbles {
-			(0x0a, _ , _, _) => self.op_annn(),
-			(0x06, _ , _, _) => self.op_6xnn(x),
-			(0x0d, _ , _, _) => self.op_dxyn(x,y,n),
-			(0x02, _ , _, _) => self.op_2nnn(),
-			(0x0f, _ , 0x03, 0x03) => self.op_fx33(x),
-			(0x0f, _ , 0x06, 0x05) => self.op_fx65(x),
- 			_ => self.unknown(),
-		}
+        // If sound timer reaches 0 let's beep
+        if cpu.sound_timer > 0 { 
+            if cpu.sound_timer == 1 {
+                // TODO: Some real sound but looks difficult in SDL2 :(
+                println!("BEEEP");
+            }
+            cpu.sound_timer -= 1
+        }
 
-	}
+        // Draw the screen
+        if cpu.draw {
+            for (y, &val) in cpu.gfx.iter().enumerate() {
+                let offset = y * 3;
+                let bitval = 255 * val;
+                pixels[offset] = bitval;
+                pixels[offset + 1] = bitval;
+                pixels[offset + 2] = bitval;
+            }
+            texture.update(None, &pixels, 64 * 3).map_err(|e| e.to_string())?;
+            canvas.clear();
+            canvas.copy(&texture, None, Some(Rect::new(0, 0, 640, 320)))?;
+            canvas.present();
+            cpu.draw = false;
+        }
+
+        // Just a flag to break the loop if an unknown instruction is found
+        if cpu.breakexe {
+            break
+        }
+
+        // Let's sleep for a while instead of fetching the next instruction
+        thread::sleep(Duration::from_millis(2))
+    }
+
+    Ok(())
 
 }
